@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="es"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Vendedor · Catálogo</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;800&family=Barlow:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="estilos.css">
+<style>body{margin:0}img{max-width:100%}[hidden]{display:none!important}
+.steps{display:grid;gap:8px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-top:16px}
+.steps ol{margin:0;padding-left:20px}
+table{width:100%;border-collapse:collapse;background:var(--surface);font-variant-numeric:tabular-nums}
+td,th{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}
+th{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+td img{width:44px;height:54px;object-fit:cover;border-radius:4px}
+.tw{overflow-x:auto;margin-block:14px 40px;border:1px solid var(--line);border-radius:12px}
+</style>
+</head><body>
+<div id="app"></div><div id="modal"></div>
+<input id="openjson" type="file" accept=".json,application/json" hidden>
+<script src="comun.js"></script>
+<script>
+const KEY='catalogo-borrador';
+let S=null, dirty=false, filter={cat:'Todas',q:''};
+const blank={brand:{name:'Mi Catálogo',tagline:'Ropa deportiva'},categories:['Soccer Europeo','Soccer Internacional','Soccer Nacional','NFL','NBA','NHL','MLB','F1'],contact:{whatsapp:'',phone:'',email:'',instagram:'',facebook:'',address:'',note:''},sheetCsvUrl:'',sheetMode:'mezclar',products:[]};
+
+function persist(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){toast('Borrador muy grande para guardarse en el navegador; descarga el archivo seguido.')}}
+function markDirty(){dirty=true;persist();render()}
+async function boot(){
+  try{const d=localStorage.getItem(KEY);if(d)S=JSON.parse(d)}catch{}
+  if(!S){try{S=await (await fetch('catalogo.json',{cache:'no-store'})).json()}catch{S=JSON.parse(JSON.stringify(blank))}}
+  S={...blank,...S};render();
+}
+function render(){
+  const q=filter.q.toLowerCase();
+  const list=S.products.filter(p=>(filter.cat==='Todas'||p.category===filter.cat)&&(!q||(p.name+p.desc+p.year).toLowerCase().includes(q)));
+  $('#app').innerHTML=`
+  <div class="sellerbar"><div class="wrap">
+   <span class="status ${dirty?'dirty':'saved'}">${dirty?'Cambios sin descargar':'Sin cambios pendientes'}</span>
+   <button class="primary" data-a="new">+ Producto</button><button data-a="cats">Categorías</button>
+   <button data-a="contact">Contacto y marca</button><button data-a="sheet">Google Sheets</button>
+   <button data-a="open">Abrir archivo</button>
+   <button class="primary" data-a="export">Descargar catalogo.json</button>
+  </div></div>
+  <header class="top"><div class="wrap"><div class="brand"><h1>${esc(S.brand.name)}</h1><p>Panel del vendedor · ${S.products.length} productos</p></div></div></header><div class="stripe"></div>
+  <main class="wrap">
+   <div class="steps"><strong>Cómo publicar tus cambios</strong><ol>
+    <li>Edita productos, categorías y contacto aquí (se guarda un borrador en este navegador).</li>
+    <li>Presiona <b>Descargar catalogo.json</b>.</li>
+    <li>Reemplaza ese archivo en tu carpeta del sitio y vuelve a subir la carpeta a Netlify.</li></ol>
+    ${S.sheetCsvUrl?`<span class="note">Google Sheets conectado (${S.sheetMode==='solo'?'solo productos de la hoja':'hoja + productos de este panel'}). Los cambios en la hoja se ven solos, sin volver a subir nada.</span>`:''}</div>
+   <div class="toolbar"><input id="q" class="search" type="search" placeholder="Buscar…" value="${esc(filter.q)}">
+    <select id="fc" style="width:auto">${['Todas',...S.categories].map(c=>`<option ${c===filter.cat?'selected':''}>${esc(c)}</option>`).join('')}</select></div>
+   <div class="tw"><table><thead><tr><th>Foto</th><th>Nombre</th><th>Categoría</th><th>Precio</th><th>Año</th><th></th></tr></thead><tbody>
+   ${list.map(p=>`<tr><td>${p.images[0]?`<img src="${esc(p.images[0])}" alt="">`:''}</td><td>${esc(p.name)}</td><td>${esc(p.category)}</td><td>${money(p.price)}</td><td>${esc(p.year)}</td>
+    <td style="white-space:nowrap"><button data-edit="${p.id}">Editar</button> <button data-dup="${p.id}">Duplicar</button> <button class="danger" data-del="${p.id}">Borrar</button></td></tr>`).join('')||'<tr><td colspan="6" class="empty">Sin productos. Usa “+ Producto”.</td></tr>'}
+   </tbody></table></div>
+  </main>`;
+}
+const openModal=h=>$('#modal').innerHTML=`<div class="overlay"><div class="modal" role="dialog" aria-modal="true">${h}</div></div>`;
+const closeModal=()=>$('#modal').innerHTML='';
+const head=t=>`<div class="mhead"><h2>${t}</h2><button class="ghost" data-close aria-label="Cerrar">✕</button></div>`;
+
+// Reduce la foto para que el catálogo cargue rápido
+function shrink(file,max=1000){return new Promise((ok,no)=>{const r=new FileReader();r.onload=()=>{const im=new Image();im.onload=()=>{
+  const s=Math.min(1,max/Math.max(im.width,im.height)),c=document.createElement('canvas');c.width=im.width*s;c.height=im.height*s;
+  c.getContext('2d').drawImage(im,0,0,c.width,c.height);ok(c.toDataURL('image/jpeg',.78))};im.onerror=no;im.src=r.result};r.onerror=no;r.readAsDataURL(file)})}
+
+function editProduct(id){
+  const orig=S.products.find(x=>x.id===id);
+  const p=orig?JSON.parse(JSON.stringify(orig)):{id:uid(),name:'',category:filter.cat!=='Todas'?filter.cat:S.categories[0]||'',price:'',year:String(new Date().getFullYear()),desc:'',images:[]};
+  const imgs=()=>p.images.map((u,k)=>`<figure><img src="${esc(u)}" alt=""><div class="ia"><button type="button" data-mv="${k}:-1">◀</button><button type="button" data-rm="${k}">✕</button><button type="button" data-mv="${k}:1">▶</button></div></figure>`).join('');
+  openModal(head(orig?'Editar producto':'Nuevo producto')+`<form class="form" id="pf">
+   <label>Nombre<input id="f-name" required value="${esc(p.name)}" placeholder="Ej. Jersey local Real Madrid"></label>
+   <div class="row2"><label>Categoría<select id="f-cat">${S.categories.map(c=>`<option ${c===p.category?'selected':''}>${esc(c)}</option>`).join('')}</select></label>
+    <label>Año<input id="f-year" inputmode="numeric" value="${esc(p.year)}"></label></div>
+   <label>Precio (MXN)<input id="f-price" inputmode="decimal" value="${esc(p.price)}"></label>
+   <label>Descripción<textarea id="f-desc" placeholder="Tallas, material, detalles…">${esc(p.desc)}</textarea></label>
+   <div><div style="font-size:13px;font-weight:600;margin-bottom:6px">Imágenes (la primera es la portada)</div>
+    <div class="imgedit"><span id="imgs" style="display:contents">${imgs()}</span><label class="drop" for="f-file">+ Subir fotos</label><input id="f-file" type="file" accept="image/*" multiple hidden></div>
+    <div class="catrow" style="margin-top:8px"><input id="f-url" placeholder="…o pega un enlace de imagen o de Google Drive"><button type="button" id="addurl">Agregar</button></div></div>
+   <div style="display:flex;gap:10px;justify-content:flex-end"><button type="button" data-close>Cancelar</button><button class="primary">Guardar producto</button></div></form>`);
+  const refresh=()=>$('#imgs').innerHTML=imgs();
+  $('#modal').onclick=e=>{const rm=e.target.closest('[data-rm]'),mv=e.target.closest('[data-mv]');
+    if(rm){p.images.splice(+rm.dataset.rm,1);refresh()}
+    if(mv){const[k,d]=mv.dataset.mv.split(':').map(Number),j=k+d;if(j>=0&&j<p.images.length){[p.images[k],p.images[j]]=[p.images[j],p.images[k]];refresh()}}};
+  $('#addurl').onclick=()=>{const v=$('#f-url').value.trim();if(v){p.images.push(imgUrl(v));$('#f-url').value='';refresh()}};
+  $('#f-file').onchange=async e=>{for(const f of e.target.files){try{p.images.push(await shrink(f));refresh()}catch{toast('No se pudo leer '+f.name)}}e.target.value=''};
+  $('#pf').onsubmit=e=>{e.preventDefault();Object.assign(p,{name:$('#f-name').value.trim(),category:$('#f-cat').value,year:$('#f-year').value.trim(),price:$('#f-price').value.trim(),desc:$('#f-desc').value});
+    if(orig)Object.assign(orig,p);else S.products.unshift(p);closeModal();markDirty();toast('Producto guardado')};
+}
+function askDelete(id){const p=S.products.find(x=>x.id===id);
+  openModal(head('Borrar producto')+`<div class="confirm"><span style="flex:1">¿Borrar “${esc(p.name)}”?</span><button data-close>Cancelar</button><button class="danger" id="yes">Sí, borrar</button></div>`);
+  $('#yes').onclick=()=>{S.products=S.products.filter(x=>x.id!==id);closeModal();markDirty()}}
+function editCats(){const draw=()=>{openModal(head('Categorías')+
+  S.categories.map((c,k)=>`<div class="catrow"><input data-ren="${k}" value="${esc(c)}"><button class="danger" data-dc="${k}">Quitar</button></div>`).join('')+
+  `<form id="cf" class="catrow"><input id="newcat" placeholder="Nueva categoría (ej. Tenis, MLS…)"><button class="primary">Agregar</button></form><p id="cmsg" class="note">Al renombrar, los productos se actualizan.</p>`);
+  $('#cf').onsubmit=e=>{e.preventDefault();const v=$('#newcat').value.trim();if(v&&!S.categories.includes(v)){S.categories.push(v);markDirty();draw()}};
+  document.querySelectorAll('[data-ren]').forEach(i=>i.onchange=()=>{const k=+i.dataset.ren,o=S.categories[k],v=i.value.trim();if(!v||S.categories.includes(v)){i.value=o;return}S.categories[k]=v;S.products.forEach(p=>{if(p.category===o)p.category=v});markDirty();draw()});
+  document.querySelectorAll('[data-dc]').forEach(b=>b.onclick=()=>{const k=+b.dataset.dc,c=S.categories[k],n=S.products.filter(p=>p.category===c).length;
+    if(n){$('#cmsg').textContent=`“${c}” tiene ${n} producto(s). Muévelos antes de quitarla.`;$('#cmsg').style.color='var(--hot)';return}S.categories.splice(k,1);markDirty();draw()})};draw()}
+function editContact(){const c=S.contact,f=(k,l,ph='')=>`<label>${l}<input id="c-${k}" value="${esc(c[k])}" placeholder="${ph}"></label>`;
+  openModal(head('Contacto y marca')+`<form class="form" id="ctf">
+   <div class="row2"><label>Nombre de la tienda<input id="b-name" value="${esc(S.brand.name)}"></label><label>Subtítulo<input id="b-tag" value="${esc(S.brand.tagline)}"></label></div>
+   <div class="row2">${f('whatsapp','WhatsApp','+52 55 1234 5678')}${f('phone','Teléfono')}</div>
+   <div class="row2">${f('email','Correo')}${f('instagram','Instagram','@tutienda')}</div>
+   <div class="row2">${f('facebook','Facebook (enlace)')}${f('address','Dirección / zona de entrega')}</div>
+   <label>Mensaje para clientes<textarea id="c-note">${esc(c.note)}</textarea></label><p class="note" style="margin:0">Los campos vacíos no se muestran.</p>
+   <div style="display:flex;gap:10px;justify-content:flex-end"><button type="button" data-close>Cancelar</button><button class="primary">Guardar</button></div></form>`);
+  $('#ctf').onsubmit=e=>{e.preventDefault();['whatsapp','phone','email','instagram','facebook','address','note'].forEach(k=>c[k]=$('#c-'+k).value.trim());
+    S.brand.name=$('#b-name').value.trim()||'Mi Catálogo';S.brand.tagline=$('#b-tag').value.trim();closeModal();markDirty()}}
+function editSheet(){openModal(head('Google Sheets')+`<form class="form" id="sf">
+  <p class="note" style="margin:0">Opcional. Captura productos en una hoja de Google con las columnas <b>nombre, categoria, precio, año, descripcion, imagenes</b> (varias fotos separadas con <b>|</b>). Luego en Google Sheets: Archivo → Compartir → Publicar en la web → formato CSV, y pega aquí el enlace.</p>
+  <label>Enlace CSV publicado<input id="s-url" value="${esc(S.sheetCsvUrl)}" placeholder="https://docs.google.com/spreadsheets/d/e/…/pub?output=csv"></label>
+  <label>¿Qué productos mostrar?<select id="s-mode"><option value="mezclar" ${S.sheetMode!=='solo'?'selected':''}>Los de la hoja y los de este panel</option><option value="solo" ${S.sheetMode==='solo'?'selected':''}>Solo los de la hoja</option></select></label>
+  <p id="smsg" class="note" style="margin:0"></p>
+  <div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap"><button type="button" id="tpl">Descargar plantilla CSV</button><button type="button" id="test">Probar enlace</button><button class="primary">Guardar</button></div></form>`);
+  $('#tpl').onclick=()=>download('plantilla-productos.csv','nombre,categoria,precio,año,descripcion,imagenes\n"Jersey local 2026",Soccer Europeo,1299,2026,"Tallas S-XL","https://drive.google.com/file/d/ID/view | https://..."\n','text/csv');
+  $('#test').onclick=async()=>{const m=$('#smsg');m.textContent='Probando…';try{const n=productsFromCSV(await (await fetch($('#s-url').value.trim())).text()).length;m.textContent=`Funciona: ${n} productos encontrados.`}catch{m.textContent='No se pudo leer. Revisa que esté publicado como CSV.'}};
+  $('#sf').onsubmit=e=>{e.preventDefault();S.sheetCsvUrl=$('#s-url').value.trim();S.sheetMode=$('#s-mode').value;closeModal();markDirty()}}
+function download(name,text,type='application/json'){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000)}
+
+document.addEventListener('click',e=>{const t=e.target;
+  if(t.closest('[data-close]')){closeModal();return}
+  const ed=t.closest('[data-edit]');if(ed)return editProduct(ed.dataset.edit);
+  const du=t.closest('[data-dup]');if(du){const o=S.products.find(x=>x.id===du.dataset.dup);S.products.splice(S.products.indexOf(o)+1,0,{...JSON.parse(JSON.stringify(o)),id:uid(),name:o.name+' (copia)'});return markDirty()}
+  const de=t.closest('[data-del]');if(de)return askDelete(de.dataset.del);
+  const a=t.closest('[data-a]');if(a)({new:()=>editProduct(),cats:editCats,contact:editContact,sheet:editSheet,open:()=>$('#openjson').click(),
+    export:()=>{download('catalogo.json',JSON.stringify(S,null,1));dirty=false;render();toast('Descargado. Súbelo a Netlify.')}})[a.dataset.a]()});
+$('#openjson').onchange=async e=>{const f=e.target.files[0];if(!f)return;try{S={...blank,...JSON.parse(await f.text())};dirty=false;persist();render();toast('Catálogo abierto')}catch{toast('Ese archivo no es un catalogo.json válido')}e.target.value=''};
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal()});
+document.addEventListener('input',e=>{if(e.target.id==='q'){filter.q=e.target.value;const p=e.target.selectionStart;render();const q=$('#q');q.focus();q.setSelectionRange(p,p)}});
+document.addEventListener('change',e=>{if(e.target.id==='fc'){filter.cat=e.target.value;render()}});
+window.addEventListener('beforeunload',e=>{if(dirty)e.preventDefault()});
+boot();
+</script>
+</body></html>
